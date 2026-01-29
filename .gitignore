@@ -1,0 +1,16 @@
+# Binary
+chat-server
+
+# Database
+chat.db
+
+# Uploads
+uploads/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

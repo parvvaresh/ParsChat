@@ -1,118 +1,110 @@
 # TCP Chat Application
 
-> **⚠️ WARNING - CRITICAL INFRASTRUCTURE**  
+> **WARNING - CRITICAL INFRASTRUCTURE**  
 > This repository is designed to facilitate communication for Iranian citizens during protests and internet shutdowns. It operates on domestic servers to maintain connectivity when external internet access is restricted or censored. Use responsibly and ensure secure deployment in sensitive environments.
 
-A feature-rich TCP chat application built in Go with user registration and file sharing capabilities, designed for resilient local network communication.
+A feature-rich chat application with a WhatsApp-like UI, built with Go and Server-Sent Events for real-time communication.
 
 ---
 
-##  Features
+## Features
 
-* **User Registration** - Register users with first and last name
-* **Real-time Messaging** - Instant messaging between connected users
-* **File Sharing** - Upload and share files (images, videos, documents)
-* **Multi-Client Support** - Support for multiple simultaneous users
-* **TCP Server** - Chat server on port 8080
-* **HTTP File Server** - File upload server on port 8081
-* **Dockerized** - Ready for deployment with Docker and Docker Compose
-* **Offline-First** - Works on local networks without internet connectivity
+### Authentication and Security
+* **User Registration and Login** - Complete authentication system
+* **Password Hashing** - Using SHA256
+* **Secure Sessions** - User management with SSE
+
+### Messaging
+* **Private Chat** - One-on-one messaging
+* **Group Chats** - Create and manage groups
+* **File Sharing** - Send images, videos, and files
+* **Typing Indicator** - Shows when user is typing
+* **Real-time Messaging** - Using Server-Sent Events
+
+### User Interface
+* **WhatsApp-like Design** - Modern and familiar UI
+* **Dark Mode** - Eye-comfortable dark theme
+* **Responsive** - Works on desktop and mobile
+* **Media Preview** - Display images and videos in chat
+* **Smooth Animations** - Professional user experience
+
+### Technical
+* **SQLite Database** - Data storage
+* **Server-Sent Events** - Real-time communications
+* **RESTful API** - Modern architecture
+* **Docker** - Ready for deployment
+* **Offline Capability** - Works on local networks without internet
 
 ---
 
-##  Project Structure
+## Project Structure
 
 ```
-├── server.go          # Chat and file upload server code
-├── client.go          # Client code with registration and upload
-├── Dockerfile         # Docker image for server and client
-├── docker-compose.yml # Service configuration
-├── go.mod             # Go module file
-├── go.sum             # Dependency checksums
-└── README.md          # Project documentation
+chatApp/
+├── cmd/
+│   └── server/
+│       └── main.go        # Main server with SSE and API
+├── public/
+│   ├── index.html         # Web UI
+│   └── app.js             # Frontend logic
+├── uploads/               # Uploaded files
+├── chat.db                # SQLite database
+├── Dockerfile             # Docker image
+├── docker-compose.yml     # Service configuration
+├── go.mod                 # Go dependencies
+└── README.md              # This file
 ```
 
 ---
 
-##  Quick Start
+## Quick Start
 
 ### Prerequisites
 
 * Go 1.21 or later
-* Docker (optional - for containerized deployment)
-* Docker Compose (optional)
+* Docker and Docker Compose (optional)
+* Modern web browser
 
 ---
 
-##  Running Locally
+## Running Locally
 
-### 1. Run Server
-
-```bash
-# Build
-go build -o chat-server ./server.go
-
-# Run
-./chat-server
-```
-
-The server runs on two ports:
-- **Port 8080**: TCP Chat Server
-- **Port 8081**: HTTP File Upload Server
-
-### 2. Run Client
+### 1. Install Dependencies
 
 ```bash
-# Build
-go build -o chat-client ./client.go
-
-# Run
-./chat-client
+go mod download
 ```
 
-Upon running, you will be prompted for:
-1. **First name**
-2. **Last name**
+### 2. Run Server
+
+```bash
+go run cmd/server/main.go
+```
+
+Server runs on `http://localhost:8080`
+
+### 3. Open in Browser
+
+Go to `http://localhost:8080` and:
+1. Register or login
+2. Search for other users
+3. Start chatting!
 
 ---
 
-##  How to Use
+## Running with Docker
 
-### Send Text Message
-Simply type your message and press Enter:
-```
-Hello everyone!
-```
-
-### Upload File
-Use the `/upload` command:
-```
-/upload /path/to/your/file.jpg
-```
-
-**Notes:**
-- Image files: `.jpg`, `.png`, `.gif`, `.webp` (displayed as image)
-- Video files: `.mp4`, `.mov`, `.webm` (displayed as video)
-- Other files: displayed as file
-- Maximum file size: 50MB
-
----
-
-##  Running with Docker
-
-### 1. Build Images
+### Build and Run
 
 ```bash
-docker-compose build
+docker-compose up --build
 ```
 
-### 2. Start Services
+### Access the Application
 
-```bash
-docker-compose up
-```
+Go to `http://localhost:8080`
 
-### 3. Stop Services
+### Stop Services
 
 ```bash
 docker-compose down
@@ -120,187 +112,192 @@ docker-compose down
 
 ---
 
-##  Architecture
+## Usage Guide
 
-### Server Architecture
+### Registration and Login
 
-**The server consists of two main components:**
+1. Open the login page
+2. Click "Register"
+3. Enter username, full name, and password
+4. After registration, login
 
-1. **TCP Server (Port 8080)**
-   - Manages client connections
-   - User registration
-   - Broadcasts messages to all connected users
+### Starting a Private Chat
 
-2. **HTTP Server (Port 8081)**
-   - Receives and stores files in `uploads/` directory
-   - Serves uploaded files
-   - Generates URLs for file access
+1. Click the chat button (New Chat)
+2. Select a user from the list
+3. Start sending messages!
 
-### Message Types
+### Creating a Group
 
-```json
-// Registration
-{
-  "type": "register",
-  "first": "John",
-  "last": "Doe"
-}
+1. Click the group button (New Group)
+2. Enter group name
+3. Select members from the list
+4. Click "Create Group"
 
-// Text Message
-{
-  "type": "text",
-  "text": "Your message here"
-}
+### Sending Media
 
-// Media Message
-{
-  "type": "media",
-  "url": "http://localhost:8081/uploads/file.jpg",
-  "mediaType": "image|video|file"
-}
+1. Click the attachment button in the input area
+2. Select an image or video
+3. File is automatically uploaded and sent
 
-// Info Message (from server)
-{
-  "type": "info",
-  "text": "Information message"
-}
+### Additional Features
+
+* **Search**: Use the search box to find contacts
+* **Typing**: When you type, the other party sees it
+* **Online Status**: See online status indicator
+
+---
+
+## API Endpoints
+
+### Authentication
+
+* `POST /api/register` - Register new user
+* `POST /api/login` - User login
+
+### Users and Groups
+
+* `GET /api/users` - Get user list
+* `GET /api/groups?userId={id}` - Get user's groups
+* `POST /api/groups` - Create new group
+
+### Messages
+
+* `GET /api/messages?userId={id}&contactId={id}` - Get private messages
+* `GET /api/messages?userId={id}&groupId={id}` - Get group messages
+* `GET /events?userId={id}` - SSE connection
+
+### Media
+
+* `POST /api/upload` - Upload file
+* `GET /uploads/{filename}` - Get uploaded file
+
+---
+
+## Database Schema
+
+### users table
+```sql
+- id (INTEGER PRIMARY KEY)
+- username (TEXT UNIQUE)
+- full_name (TEXT)
+- password (TEXT - SHA256 hash)
+- created_at (DATETIME)
+```
+
+### groups table
+```sql
+- id (INTEGER PRIMARY KEY)
+- name (TEXT)
+- creator_id (INTEGER)
+- created_at (DATETIME)
+```
+
+### group_members table
+```sql
+- group_id (INTEGER)
+- user_id (INTEGER)
+- joined_at (DATETIME)
+```
+
+### messages table
+```sql
+- id (INTEGER PRIMARY KEY)
+- from_user (INTEGER)
+- to_user (INTEGER, nullable)
+- group_id (INTEGER, nullable)
+- content (TEXT, nullable)
+- media_url (TEXT, nullable)
+- media_type (TEXT, nullable)
+- timestamp (DATETIME)
 ```
 
 ---
 
-## 🔧 Configuration
+## Production Deployment
 
-### Change Server Address
+### Environment Variables
 
-In `client.go`:
-```go
-conn, err := net.Dial("tcp", "localhost:8080")
-```
-
-### Change Maximum File Size
-
-In `server.go`:
-```go
-err := r.ParseMultipartForm(50 << 20) // 50MB - you can change this
-```
-
----
-
-##  CI/CD with GitHub Actions
-
-The project includes GitHub Actions workflow for:
-- Building Go binaries
-- Running tests
-- Building Docker images
-- Deployment (optional)
-
----
-
-##  Development
-
-### Add New Features
-
-Some development ideas:
-- **Chat Rooms** - Create multiple channels
-- **Message Encryption** - Enhanced security for data transmission
-- **Message History** - Store messages in database
-- **WebSocket Support** - Web browser compatibility
-- **Private Messages** - Direct messaging between two users
-- **Notifications** - Alerts for new messages
-- **Authentication** - Login system with passwords
-- **End-to-End Encryption** - For maximum privacy in sensitive communications
-
-### Code Structure
-
-```go
-// Server Components
-- handleConnection()  // Manage connections
-- broadcast()         // Broadcast messages to all
-- uploadHandler()     // Handle file uploads
-
-// Client Components
-- uploadFile()        // Upload file
-- detectMediaType()   // Detect media type
-```
-
----
-
-##  Troubleshooting
-
-### "Connection refused" Error
 ```bash
-# Make sure the server is running
-ps aux | grep server.go
+PORT=8080              # Server port
 ```
 
-### File Upload Issues
-- Check file size (maximum 50MB)
-- Enter the correct file path
-- Make sure HTTP server is running on port 8081
+### Security Notes
 
-### Port Already in Use
+1. Use HTTPS in production
+2. Enforce strong passwords
+3. Implement rate limiting
+4. Regular database backups
+5. Input validation and sanitization
+
+---
+
+## Development
+
+### Build from Source
+
 ```bash
-# Find process on port 8080 or 8081
-lsof -i :8080
-lsof -i :8081
-
-# Kill the process
-kill -9 <PID>
+CGO_ENABLED=1 go build -o chat-server ./cmd/server
+./chat-server
 ```
+
+### Dependencies
+
+* `github.com/mattn/go-sqlite3` - SQLite driver
 
 ---
 
-##  API Reference
+## TODO / Future Improvements
 
-### TCP Protocol
-
-**Register:**
-```json
-{"type": "register", "first": "Ali", "last": "Ahmadi"}
-```
-
-**Send Text:**
-```json
-{"type": "text", "text": "Hello World"}
-```
-
-**Send Media:**
-```json
-{"type": "media", "url": "http://...", "mediaType": "image"}
-```
-
-### HTTP API
-
-**Upload File:**
-```bash
-curl -X POST http://localhost:8081/upload \
-  -F "file=@/path/to/file.jpg"
-```
-
-**Response:**
-```json
-{"url": "http://localhost:8081/uploads/1234567890.jpg"}
-```
+- [ ] JWT authentication
+- [ ] End-to-end encryption
+- [ ] Voice/video calls
+- [ ] Push notifications
+- [ ] Emoji reactions
+- [ ] Location sharing
+- [ ] Voice messages
+- [ ] Custom themes
+- [ ] Mobile app (React Native)
 
 ---
 
-##  Contributing
+## Contributing
 
-Contributions are welcome! Feel free to:
-- Report bugs
-- Suggest new features
-- Submit pull requests
+Contributions are welcome! Please:
 
----
-
-## 👨‍💻 Author
-
-Built with ❤️ using Go
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
 ---
 
-## 📄 License
+## License
 
-This project is licensed under the MIT License.
+This project is released under the MIT License.
+
+---
+
+## Ethical Use
+
+This tool is designed to help free communication during critical times. Please:
+
+* Use responsibly and legally
+* Respect user privacy
+* Avoid misuse
+* Be aware of security requirements
+
+---
+
+## Support
+
+For issues, questions, or feature requests:
+* Create an Issue on GitHub
+* Join discussions
+
+---
+
+**Built for free communication**
 
 

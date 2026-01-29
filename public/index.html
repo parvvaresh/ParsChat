@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Room</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #111b21;
+            color: #e9edef;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #auth-screen {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .auth-container {
+            background: #fff;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            width: 400px;
+            max-width: 90%;
+            color: #333;
+        }
+
+        .auth-container h2 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #667eea;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+
+        .auth-toggle {
+            text-align: center;
+            margin-top: 20px;
+            color: #666;
+        }
+
+        .auth-toggle a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        #chat-screen {
+            display: none;
+            height: 100vh;
+            background: #111b21;
+        }
+
+        .chat-container {
+            display: flex;
+            height: 100%;
+        }
+
+        .sidebar {
+            width: 380px;
+            background: #111b21;
+            border-right: 1px solid #2a3942;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-header {
+            background: #202c33;
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 18px;
+        }
+
+        .sidebar-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .icon-btn {
+            background: transparent;
+            border: none;
+            color: #aebac1;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 50%;
+            transition: background 0.3s;
+            font-size: 14px;
+        }
+
+        .icon-btn:hover {
+            background: #2a3942;
+        }
+
+        .search-box {
+            background: #202c33;
+            padding: 10px;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 8px;
+            background: #111b21;
+            color: #e9edef;
+            font-size: 14px;
+        }
+
+        .search-box input:focus {
+            outline: none;
+        }
+
+        .contacts-list {
+            flex: 1;
+            overflow-y: auto;
+            background: #111b21;
+        }
+
+        .contact-item {
+            padding: 15px;
+            border-bottom: 1px solid #2a3942;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            transition: background 0.3s;
+        }
+
+        .contact-item:hover {
+            background: #202c33;
+        }
+
+        .contact-item.active {
+            background: #2a3942;
+        }
+
+        .contact-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .contact-name {
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
+
+        .contact-preview {
+            font-size: 13px;
+            color: #8696a0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .contact-meta {
+            text-align: right;
+            font-size: 12px;
+            color: #8696a0;
+        }
+
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #0b141a;
+        }
+
+        .chat-header {
+            background: #202c33;
+            padding: 15px 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            border-bottom: 1px solid #2a3942;
+        }
+
+        .chat-header-info {
+            flex: 1;
+        }
+
+        .chat-header-name {
+            font-weight: 500;
+            margin-bottom: 3px;
+        }
+
+        .chat-header-status {
+            font-size: 13px;
+            color: #8696a0;
+        }
+
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="%230b141a" width="100" height="100"/><circle fill="%23111b21" cx="50" cy="50" r="1"/></svg>');
+            background-size: 40px 40px;
+        }
+
+        .message {
+            display: flex;
+            margin-bottom: 15px;
+            animation: fadeIn 0.3s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.sent {
+            justify-content: flex-end;
+        }
+
+        .message.received {
+            justify-content: flex-start;
+        }
+
+        .message-bubble {
+            max-width: 65%;
+            padding: 8px 12px;
+            border-radius: 8px;
+            position: relative;
+        }
+
+        .message.sent .message-bubble {
+            background: #005c4b;
+            border-bottom-right-radius: 2px;
+        }
+
+        .message.received .message-bubble {
+            background: #202c33;
+            border-bottom-left-radius: 2px;
+        }
+
+        .message-sender {
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: #667eea;
+            font-size: 13px;
+        }
+
+        .message-content {
+            word-wrap: break-word;
+            margin-bottom: 5px;
+        }
+
+        .message-media {
+            max-width: 300px;
+            border-radius: 8px;
+            margin-bottom: 5px;
+            cursor: pointer;
+        }
+
+        .message-time {
+            font-size: 11px;
+            color: #8696a0;
+            text-align: right;
+        }
+
+        .typing-indicator {
+            display: none;
+            padding: 8px 12px;
+            background: #202c33;
+            border-radius: 8px;
+            width: fit-content;
+            margin-bottom: 15px;
+        }
+
+        .typing-indicator.active {
+            display: block;
+        }
+
+        .typing-dots {
+            display: flex;
+            gap: 4px;
+        }
+
+        .typing-dots span {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #8696a0;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-dots span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-dots span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-10px); }
+        }
+
+        .input-area {
+            background: #202c33;
+            padding: 10px 20px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .input-actions {
+            display: flex;
+            gap: 5px;
+        }
+
+        .input-field {
+            flex: 1;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 8px;
+            background: #2a3942;
+            color: #e9edef;
+            font-size: 15px;
+        }
+
+        .input-field:focus {
+            outline: none;
+        }
+
+        .send-btn {
+            background: #005c4b;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.3s;
+        }
+
+        .send-btn:hover {
+            background: #004a3d;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: #202c33;
+            padding: 30px;
+            border-radius: 12px;
+            width: 500px;
+            max-width: 90%;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .modal-header h3 {
+            color: #e9edef;
+        }
+
+        .close-btn {
+            background: transparent;
+            border: none;
+            color: #8696a0;
+            font-size: 24px;
+            cursor: pointer;
+        }
+
+        .user-list {
+            max-height: 400px;
+            overflow-y: auto;
+            margin: 20px 0;
+        }
+
+        .user-item {
+            padding: 12px;
+            border: 1px solid #2a3942;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .user-item input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #8696a0;
+        }
+
+        .empty-state-icon {
+            font-size: 80px;
+            margin-bottom: 20px;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #111b21;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #2a3942;
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #374853;
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 100%;
+            }
+            
+            .chat-area {
+                display: none;
+            }
+            
+            .chat-area.active {
+                display: flex;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Auth Screen -->
+    <div id="auth-screen">
+        <div class="auth-container">
+            <h2>Login to Chat Room</h2>
+            <div id="login-form">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="login-username" placeholder="Enter your username">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="login-password" placeholder="Password">
+                </div>
+                <button class="btn btn-primary" onclick="login()">Login</button>
+                <div class="auth-toggle">
+                    Don't have an account? <a href="#" onclick="toggleAuth()">Register</a>
+                </div>
+            </div>
+            <div id="register-form" style="display:none;">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="reg-username" placeholder="Username">
+                </div>
+                <div class="form-group">
+                    <label>Full Name</label>
+                    <input type="text" id="reg-fullname" placeholder="Full Name">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="reg-password" placeholder="Password">
+                </div>
+                <button class="btn btn-primary" onclick="register()">Register</button>
+                <div class="auth-toggle">
+                    Already have an account? <a href="#" onclick="toggleAuth()">Login</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chat Screen -->
+    <div id="chat-screen">
+        <div class="chat-container">
+            <!-- Sidebar -->
+            <div class="sidebar">
+                <div class="sidebar-header">
+                    <div class="user-info">
+                        <div class="avatar" id="user-avatar"></div>
+                        <span id="user-name"></span>
+                    </div>
+                    <div class="sidebar-actions">
+                        <button class="icon-btn" onclick="showNewGroupModal()" title="New Group">[G]</button>
+                        <button class="icon-btn" onclick="showNewChatModal()" title="New Chat">[C]</button>
+                        <button class="icon-btn" onclick="logout()" title="Logout">[X]</button>
+                    </div>
+                </div>
+                <div class="search-box">
+                    <input type="text" placeholder="Search..." id="search-input" onkeyup="filterContacts()">
+                </div>
+                <div class="contacts-list" id="contacts-list">
+                    <!-- Contacts will be loaded here -->
+                </div>
+            </div>
+
+            <!-- Chat Area -->
+            <div class="chat-area" id="chat-area">
+                <div class="empty-state">
+                    <div class="empty-state-icon">[Chat]</div>
+                    <h3>Select a contact to start chatting</h3>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Chat Modal -->
+    <div id="new-chat-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>New Private Chat</h3>
+                <button class="close-btn" onclick="closeModal('new-chat-modal')">&times;</button>
+            </div>
+            <div class="user-list" id="users-for-chat"></div>
+        </div>
+    </div>
+
+    <!-- New Group Modal -->
+    <div id="new-group-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>New Group</h3>
+                <button class="close-btn" onclick="closeModal('new-group-modal')">&times;</button>
+            </div>
+            <div class="form-group">
+                <label>Group Name</label>
+                <input type="text" id="group-name" placeholder="Enter group name">
+            </div>
+            <div class="user-list" id="users-for-group"></div>
+            <button class="btn btn-primary" onclick="createGroup()">Create Group</button>
+        </div>
+    </div>
+
+    <input type="file" id="file-input" class="file-input" accept="image/*,video/*" onchange="uploadFile()">
+
+    <script src="app.js"></script>
+</body>
+</html>

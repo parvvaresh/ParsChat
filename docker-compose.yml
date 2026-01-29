@@ -6,23 +6,10 @@ services:
     container_name: chat-server
     ports:
       - "8080:8080"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./chat.db:/app/chat.db
     restart: unless-stopped
+    environment:
+      - PORT=8080
     command: ./chat-server
-
-  chat-client1:
-    build: .
-    container_name: chat-client1
-    depends_on:
-      - chat-server
-    stdin_open: true
-    tty: true
-    command: ./chat-client
-
-  chat-client2:
-    build: .
-    container_name: chat-client2
-    depends_on:
-      - chat-server
-    stdin_open: true
-    tty: true
-    command: ./chat-client
