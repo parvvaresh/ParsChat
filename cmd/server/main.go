@@ -12,17 +12,27 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 var (
-	db      *sql.DB
-	clients = make(map[int]*Client)
-	mu      sync.RWMutex
+	db        *sql.DB
+	clients   = make(map[int]*Client)
+	mu        sync.RWMutex
+	jwtSecret = []byte("your-secret-key-change-in-production-12345")
 )
+
+// Claims represents JWT claims
+type Claims struct {
+	UserID   int    `json:"userId"`
+	Username string `json:"username"`
+	jwt.RegisteredClaims
+}
 
 // Client represents a connected user
 type Client struct {
@@ -41,14 +51,28 @@ type User struct {
 
 // Message represents a chat message
 type Message struct {
-	Type      string `json:"type"`
-	Content   string `json:"content,omitempty"`
-	From      int    `json:"from,omitempty"`
-	To        int    `json:"to,omitempty"`
-	GroupID   int    `json:"groupId,omitempty"`
-	MediaURL  string `json:"mediaUrl,omitempty"`
-	MediaType string `json:"mediaType,omitempty"`
-	Timestamp int64  `json:"timestamp,omitempty"`
+	ID        int        `json:"id,omitempty"`
+	Type      string     `json:"type"`
+	Content   string     `json:"content,omitempty"`
+	From      int        `json:"from,omitempty"`
+	To        int        `json:"to,omitempty"`
+	GroupID   int        `json:"groupId,omitempty"`
+	MediaURL  string     `json:"mediaUrl,omitempty"`
+	MediaType string     `json:"mediaType,omitempty"`
+	Latitude  *float64   `json:"latitude,omitempty"`
+	Longitude *float64   `json:"longitude,omitempty"`
+	Timestamp int64      `json:"timestamp,omitempty"`
+	IsRead    bool       `json:"isRead,omitempty"`
+	Reactions []Reaction `json:"reactions,omitempty"`
+}
+
+// Reaction represents emoji reaction on a message
+type Reaction struct {
+	ID        int    `json:"id"`
+	MessageID int    `json:"messageId"`
+	UserID    int    `json:"userId"`
+	Emoji     string `json:"emoji"`
+	UserName  string `json:"userName,omitempty"`
 }
 
 // Group represents a chat group
@@ -100,7 +124,27 @@ func initDB() {
 		content TEXT,
 		media_url TEXT,
 		media_type TEXT,
+		latitude REAL,
+		longitude REAL,
 		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+
+	// Create message reads table for read receipts
+	db.Exec(`CREATE TABLE IF NOT EXISTS message_reads (
+		message_id INTEGER NOT NULL,
+		user_id INTEGER NOT NULL,
+		read_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY(message_id, user_id)
+	)`)
+
+	// Create message reactions table
+	db.Exec(`CREATE TABLE IF NOT EXISTS message_reactions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		message_id INTEGER NOT NULL,
+		user_id INTEGER NOT NULL,
+		emoji TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(message_id, user_id, emoji)
 	)`)
 
 	// Create blocked users table
@@ -109,6 +153,14 @@ func initDB() {
 		blocked_id INTEGER NOT NULL,
 		blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY(blocker_id, blocked_id)
+	)`)
+
+	// Create user encryption keys table for E2E encryption
+	db.Exec(`CREATE TABLE IF NOT EXISTS user_keys (
+		user_id INTEGER PRIMARY KEY,
+		public_key TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
 
 	log.Println("[OK] Database initialized")
@@ -120,11 +172,76 @@ func hashPassword(password string) string {
 	return hex.EncodeToString(hash[:])
 }
 
+// generateJWT creates a new JWT token for user
+func generateJWT(userID int, username string) (string, error) {
+	expirationTime := time.Now().Add(24 * time.Hour)
+	claims := &Claims{
+		UserID:   userID,
+		Username: username,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtSecret)
+}
+
+// validateJWT validates the JWT token and returns claims
+func validateJWT(tokenString string) (*Claims, error) {
+	claims := &Claims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		return jwtSecret, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	if !token.Valid {
+		return nil, fmt.Errorf("invalid token")
+	}
+
+	return claims, nil
+}
+
+// authMiddleware validates JWT from Authorization header
+func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		enableCORS(w)
+		if r.Method == "OPTIONS" {
+			return
+		}
+
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, "Authorization header required", http.StatusUnauthorized)
+			return
+		}
+
+		// Extract token from "Bearer <token>"
+		parts := strings.Split(authHeader, " ")
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
+			return
+		}
+
+		_, err := validateJWT(parts[1])
+		if err != nil {
+			http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
+			return
+		}
+
+		next(w, r)
+	}
+}
+
 // enableCORS sets CORS headers for cross-origin requests
 func enableCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 }
 
 // registerHandler handles user registration
@@ -190,11 +307,19 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate JWT token
+	token, err := generateJWT(user.ID, user.Username)
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"id":       user.ID,
 		"username": user.Username,
 		"fullName": user.FullName,
+		"token":    token,
 	})
 }
 
@@ -316,7 +441,7 @@ func getMessagesHandler(w http.ResponseWriter, r *http.Request) {
 		// Get group messages
 		rows, err = db.Query(`
 			SELECT id, from_user, to_user, group_id, content, media_url, media_type, 
-			       strftime('%s', timestamp) as ts
+			       latitude, longitude, strftime('%s', timestamp) as ts
 			FROM messages 
 			WHERE group_id = ?
 			ORDER BY timestamp ASC
@@ -325,7 +450,7 @@ func getMessagesHandler(w http.ResponseWriter, r *http.Request) {
 		// Get private messages between two users
 		rows, err = db.Query(`
 			SELECT id, from_user, to_user, group_id, content, media_url, media_type,
-			       strftime('%s', timestamp) as ts
+			       latitude, longitude, strftime('%s', timestamp) as ts
 			FROM messages 
 			WHERE (from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?)
 			ORDER BY timestamp ASC
@@ -344,7 +469,9 @@ func getMessagesHandler(w http.ResponseWriter, r *http.Request) {
 		var id int
 		var toUser, groupIDVal sql.NullInt64
 		var content, mediaURL, mediaType sql.NullString
-		rows.Scan(&id, &m.From, &toUser, &groupIDVal, &content, &mediaURL, &mediaType, &m.Timestamp)
+		var latitude, longitude sql.NullFloat64
+		rows.Scan(&id, &m.From, &toUser, &groupIDVal, &content, &mediaURL, &mediaType, &latitude, &longitude, &m.Timestamp)
+		m.ID = id
 		if toUser.Valid {
 			m.To = int(toUser.Int64)
 		}
@@ -360,7 +487,36 @@ func getMessagesHandler(w http.ResponseWriter, r *http.Request) {
 		if mediaType.Valid {
 			m.MediaType = mediaType.String
 		}
+		if latitude.Valid {
+			lat := latitude.Float64
+			m.Latitude = &lat
+		}
+		if longitude.Valid {
+			lon := longitude.Float64
+			m.Longitude = &lon
+		}
 		m.Type = "message"
+
+		// Load reactions for this message
+		reactRows, _ := db.Query(`
+			SELECT r.id, r.message_id, r.user_id, r.emoji, u.full_name
+			FROM message_reactions r
+			JOIN users u ON r.user_id = u.id
+			WHERE r.message_id = ?
+			ORDER BY r.created_at ASC`, id)
+
+		var reactions []Reaction
+		for reactRows.Next() {
+			var r Reaction
+			reactRows.Scan(&r.ID, &r.MessageID, &r.UserID, &r.Emoji, &r.UserName)
+			reactions = append(reactions, r)
+		}
+		reactRows.Close()
+
+		if reactions != nil {
+			m.Reactions = reactions
+		}
+
 		messages = append(messages, m)
 	}
 
@@ -485,10 +641,11 @@ func sendMessageHandler(w http.ResponseWriter, r *http.Request) {
 	msg.Timestamp = time.Now().Unix()
 
 	// Save message to database
+	var result sql.Result
 	if msg.GroupID > 0 {
 		// Group message
-		db.Exec("INSERT INTO messages (from_user, group_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?)",
-			msg.From, msg.GroupID, msg.Content, msg.MediaURL, msg.MediaType)
+		result, _ = db.Exec("INSERT INTO messages (from_user, group_id, content, media_url, media_type, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			msg.From, msg.GroupID, msg.Content, msg.MediaURL, msg.MediaType, msg.Latitude, msg.Longitude)
 
 		// Send to all group members
 		rows, _ := db.Query("SELECT user_id FROM group_members WHERE group_id = ?", msg.GroupID)
@@ -509,9 +666,20 @@ func sendMessageHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		rows.Close()
 	} else {
+		// Check if sender is blocked by recipient
+		var blockCount int
+		db.QueryRow("SELECT COUNT(*) FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?",
+			msg.To, msg.From).Scan(&blockCount)
+
+		if blockCount > 0 {
+			// User is blocked, don't send message
+			http.Error(w, "User has blocked you", http.StatusForbidden)
+			return
+		}
+
 		// Private message
-		db.Exec("INSERT INTO messages (from_user, to_user, content, media_url, media_type) VALUES (?, ?, ?, ?, ?)",
-			msg.From, msg.To, msg.Content, msg.MediaURL, msg.MediaType)
+		result, _ = db.Exec("INSERT INTO messages (from_user, to_user, content, media_url, media_type, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			msg.From, msg.To, msg.Content, msg.MediaURL, msg.MediaType, msg.Latitude, msg.Longitude)
 
 		// Send to recipient
 		mu.RLock()
@@ -525,8 +693,15 @@ func sendMessageHandler(w http.ResponseWriter, r *http.Request) {
 		mu.RUnlock()
 	}
 
+	// Get the message ID
+	messageID, _ := result.LastInsertId()
+	msg.ID = int(messageID)
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "ok",
+		"messageId": messageID,
+	})
 }
 
 // typingHandler handles typing indicator notifications
@@ -665,6 +840,248 @@ func getBlockedUsersHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(blockedIDs)
 }
 
+// markMessageReadHandler marks a message as read
+func markMessageReadHandler(w http.ResponseWriter, r *http.Request) {
+	enableCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	var req struct {
+		MessageID int `json:"messageId"`
+		UserID    int `json:"userId"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	_, err := db.Exec("INSERT OR IGNORE INTO message_reads (message_id, user_id) VALUES (?, ?)",
+		req.MessageID, req.UserID)
+	if err != nil {
+		http.Error(w, "Failed to mark as read", http.StatusInternalServerError)
+		return
+	}
+
+	// Get message details to notify sender
+	var fromUser, toUser sql.NullInt64
+	db.QueryRow("SELECT from_user, to_user FROM messages WHERE id = ?", req.MessageID).
+		Scan(&fromUser, &toUser)
+
+	// Send read receipt notification to message sender
+	if fromUser.Valid && int(fromUser.Int64) != req.UserID {
+		readNotification := map[string]interface{}{
+			"type":      "read_receipt",
+			"messageId": req.MessageID,
+			"userId":    req.UserID,
+		}
+		data, _ := json.Marshal(readNotification)
+
+		mu.RLock()
+		if client, ok := clients[int(fromUser.Int64)]; ok {
+			select {
+			case client.Messages <- data:
+			default:
+			}
+		}
+		mu.RUnlock()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// addReactionHandler adds emoji reaction to a message
+func addReactionHandler(w http.ResponseWriter, r *http.Request) {
+	enableCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	var req struct {
+		MessageID int    `json:"messageId"`
+		UserID    int    `json:"userId"`
+		Emoji     string `json:"emoji"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	result, err := db.Exec("INSERT OR IGNORE INTO message_reactions (message_id, user_id, emoji) VALUES (?, ?, ?)",
+		req.MessageID, req.UserID, req.Emoji)
+	if err != nil {
+		http.Error(w, "Failed to add reaction", http.StatusInternalServerError)
+		return
+	}
+
+	// Get message details to find recipients
+	var fromUser, toUser sql.NullInt64
+	var groupID sql.NullInt64
+	db.QueryRow("SELECT from_user, to_user, group_id FROM messages WHERE id = ?", req.MessageID).
+		Scan(&fromUser, &toUser, &groupID)
+
+	// Broadcast reaction update to relevant users
+	reactionUpdate := map[string]interface{}{
+		"type":      "reaction",
+		"action":    "add",
+		"messageId": req.MessageID,
+		"userId":    req.UserID,
+		"emoji":     req.Emoji,
+	}
+	data, _ := json.Marshal(reactionUpdate)
+
+	mu.RLock()
+	if groupID.Valid {
+		// Send to all group members
+		rows, _ := db.Query("SELECT user_id FROM group_members WHERE group_id = ?", groupID.Int64)
+		for rows.Next() {
+			var memberID int
+			rows.Scan(&memberID)
+			if memberID != req.UserID {
+				if client, ok := clients[memberID]; ok {
+					select {
+					case client.Messages <- data:
+					default:
+					}
+				}
+			}
+		}
+		rows.Close()
+	} else if toUser.Valid && fromUser.Valid {
+		// Send to both sender and receiver in private chat
+		for _, recipientID := range []int{int(fromUser.Int64), int(toUser.Int64)} {
+			if recipientID != req.UserID {
+				if client, ok := clients[recipientID]; ok {
+					select {
+					case client.Messages <- data:
+					default:
+					}
+				}
+			}
+		}
+	}
+	mu.RUnlock()
+
+	id, _ := result.LastInsertId()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":     id,
+		"status": "ok",
+	})
+}
+
+// removeReactionHandler removes emoji reaction from a message
+func removeReactionHandler(w http.ResponseWriter, r *http.Request) {
+	enableCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	var req struct {
+		MessageID int    `json:"messageId"`
+		UserID    int    `json:"userId"`
+		Emoji     string `json:"emoji"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	_, err := db.Exec("DELETE FROM message_reactions WHERE message_id = ? AND user_id = ? AND emoji = ?",
+		req.MessageID, req.UserID, req.Emoji)
+	if err != nil {
+		http.Error(w, "Failed to remove reaction", http.StatusInternalServerError)
+		return
+	}
+
+	// Get message details to find recipients
+	var fromUser, toUser sql.NullInt64
+	var groupID sql.NullInt64
+	db.QueryRow("SELECT from_user, to_user, group_id FROM messages WHERE id = ?", req.MessageID).
+		Scan(&fromUser, &toUser, &groupID)
+
+	// Broadcast reaction update to relevant users
+	reactionUpdate := map[string]interface{}{
+		"type":      "reaction",
+		"action":    "remove",
+		"messageId": req.MessageID,
+		"userId":    req.UserID,
+		"emoji":     req.Emoji,
+	}
+	data, _ := json.Marshal(reactionUpdate)
+
+	mu.RLock()
+	if groupID.Valid {
+		// Send to all group members
+		rows, _ := db.Query("SELECT user_id FROM group_members WHERE group_id = ?", groupID.Int64)
+		for rows.Next() {
+			var memberID int
+			rows.Scan(&memberID)
+			if memberID != req.UserID {
+				if client, ok := clients[memberID]; ok {
+					select {
+					case client.Messages <- data:
+					default:
+					}
+				}
+			}
+		}
+		rows.Close()
+	} else if toUser.Valid && fromUser.Valid {
+		// Send to both sender and receiver in private chat
+		for _, recipientID := range []int{int(fromUser.Int64), int(toUser.Int64)} {
+			if recipientID != req.UserID {
+				if client, ok := clients[recipientID]; ok {
+					select {
+					case client.Messages <- data:
+					default:
+					}
+				}
+			}
+		}
+	}
+	mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// getMessageReactionsHandler gets all reactions for a message
+func getMessageReactionsHandler(w http.ResponseWriter, r *http.Request) {
+	enableCORS(w)
+	messageID := r.URL.Query().Get("messageId")
+
+	rows, err := db.Query(`
+		SELECT r.id, r.message_id, r.user_id, r.emoji, u.full_name
+		FROM message_reactions r
+		JOIN users u ON r.user_id = u.id
+		WHERE r.message_id = ?
+		ORDER BY r.created_at ASC`, messageID)
+	if err != nil {
+		http.Error(w, "Server error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var reactions []Reaction
+	for rows.Next() {
+		var r Reaction
+		rows.Scan(&r.ID, &r.MessageID, &r.UserID, &r.Emoji, &r.UserName)
+		reactions = append(reactions, r)
+	}
+
+	if reactions == nil {
+		reactions = []Reaction{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(reactions)
+}
+
 // leaveGroupHandler handles user leaving a group
 func leaveGroupHandler(w http.ResponseWriter, r *http.Request) {
 	enableCORS(w)
@@ -762,6 +1179,52 @@ func getGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(members)
 }
 
+// savePublicKeyHandler saves user's public key for E2E encryption
+func savePublicKeyHandler(w http.ResponseWriter, r *http.Request) {
+	enableCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	var req struct {
+		UserID    int    `json:"userId"`
+		PublicKey string `json:"publicKey"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	_, err := db.Exec(`INSERT INTO user_keys (user_id, public_key, updated_at) 
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(user_id) DO UPDATE SET public_key = ?, updated_at = CURRENT_TIMESTAMP`,
+		req.UserID, req.PublicKey, req.PublicKey)
+	if err != nil {
+		http.Error(w, "Failed to save key", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// getPublicKeyHandler retrieves user's public key
+func getPublicKeyHandler(w http.ResponseWriter, r *http.Request) {
+	enableCORS(w)
+	userID := r.URL.Query().Get("userId")
+
+	var publicKey string
+	err := db.QueryRow("SELECT public_key FROM user_keys WHERE user_id = ?", userID).Scan(&publicKey)
+	if err != nil {
+		http.Error(w, "Key not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"publicKey": publicKey})
+}
+
 func main() {
 	initDB()
 
@@ -787,6 +1250,12 @@ func main() {
 	http.HandleFunc("/api/group/leave", leaveGroupHandler)
 	http.HandleFunc("/api/group/remove", removeGroupMemberHandler)
 	http.HandleFunc("/api/group/members", getGroupMembersHandler)
+	http.HandleFunc("/api/messages/read", markMessageReadHandler)
+	http.HandleFunc("/api/reactions/add", addReactionHandler)
+	http.HandleFunc("/api/reactions/remove", removeReactionHandler)
+	http.HandleFunc("/api/reactions", getMessageReactionsHandler)
+	http.HandleFunc("/api/keys/save", savePublicKeyHandler)
+	http.HandleFunc("/api/keys/get", getPublicKeyHandler)
 	http.HandleFunc("/events", sseHandler)
 
 	// Serve uploaded files
