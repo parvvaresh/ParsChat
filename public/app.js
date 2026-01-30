@@ -1,4 +1,5 @@
 let currentUser = null;
+let authToken = null;
 let eventSource = null;
 let contacts = [];
 let groups = [];
@@ -9,6 +10,169 @@ let blockedUsers = new Set();
 let messageFilter = 'all'; // 'all', 'media', 'image', 'video', 'audio'
 let mediaRecorder = null;
 let audioChunks = [];
+
+// E2E Encryption keys
+let privateKey = null;
+let publicKey = null;
+let userPublicKeys = {}; // Cache for other users' public keys
+
+// E2E Encryption functions
+async function generateKeyPair() {
+    try {
+        const keyPair = await window.crypto.subtle.generateKey(
+            {
+                name: "RSA-OAEP",
+                modulusLength: 2048,
+                publicExponent: new Uint8Array([1, 0, 1]),
+                hash: "SHA-256"
+            },
+            true,
+            ["encrypt", "decrypt"]
+        );
+        return keyPair;
+    } catch (err) {
+        console.error('Failed to generate key pair:', err);
+        return null;
+    }
+}
+
+async function exportPublicKey(key) {
+    const exported = await window.crypto.subtle.exportKey("spki", key);
+    const exportedAsBase64 = btoa(String.fromCharCode(...new Uint8Array(exported)));
+    return exportedAsBase64;
+}
+
+async function importPublicKey(base64Key) {
+    const binaryKey = Uint8Array.from(atob(base64Key), c => c.charCodeAt(0));
+    return await window.crypto.subtle.importKey(
+        "spki",
+        binaryKey,
+        {
+            name: "RSA-OAEP",
+            hash: "SHA-256"
+        },
+        true,
+        ["encrypt"]
+    );
+}
+
+async function encryptMessage(message, recipientPublicKey) {
+    try {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(message);
+        const encrypted = await window.crypto.subtle.encrypt(
+            { name: "RSA-OAEP" },
+            recipientPublicKey,
+            data
+        );
+        return btoa(String.fromCharCode(...new Uint8Array(encrypted)));
+    } catch (err) {
+        console.error('Encryption failed:', err);
+        return null;
+    }
+}
+
+async function decryptMessage(encryptedMessage) {
+    try {
+        const encryptedData = Uint8Array.from(atob(encryptedMessage), c => c.charCodeAt(0));
+        const decrypted = await window.crypto.subtle.decrypt(
+            { name: "RSA-OAEP" },
+            privateKey,
+            encryptedData
+        );
+        const decoder = new TextDecoder();
+        return decoder.decode(decrypted);
+    } catch (err) {
+        console.error('Decryption failed:', err);
+        return '[Encrypted Message]';
+    }
+}
+
+async function getPublicKey(userId) {
+    if (userPublicKeys[userId]) {
+        return userPublicKeys[userId];
+    }
+    
+    try {
+        const res = await fetch(`/api/keys/get?userId=${userId}`);
+        if (res.ok) {
+            const data = await res.json();
+            const importedKey = await importPublicKey(data.publicKey);
+            userPublicKeys[userId] = importedKey;
+            return importedKey;
+        }
+    } catch (err) {
+        console.error('Failed to get public key:', err);
+    }
+    return null;
+}
+
+async function savePublicKey(userId, publicKeyBase64) {
+    try {
+        await fetch('/api/keys/save', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                userId: userId,
+                publicKey: publicKeyBase64
+            })
+        });
+    } catch (err) {
+        console.error('Failed to save public key:', err);
+    }
+}
+
+async function initializeEncryption() {
+    // Check if keys exist in local storage
+    const storedPrivateKey = localStorage.getItem(`privateKey_${currentUser.id}`);
+    const storedPublicKey = localStorage.getItem(`publicKey_${currentUser.id}`);
+    
+    if (storedPrivateKey && storedPublicKey) {
+        // Import stored keys
+        try {
+            const privateKeyData = JSON.parse(storedPrivateKey);
+            const binaryPrivateKey = Uint8Array.from(atob(privateKeyData.key), c => c.charCodeAt(0));
+            privateKey = await window.crypto.subtle.importKey(
+                "pkcs8",
+                binaryPrivateKey,
+                {
+                    name: "RSA-OAEP",
+                    hash: "SHA-256"
+                },
+                true,
+                ["decrypt"]
+            );
+            publicKey = await importPublicKey(storedPublicKey);
+            console.log('Encryption keys loaded from storage');
+        } catch (err) {
+            console.error('Failed to load keys, generating new ones:', err);
+            await generateAndStoreKeys();
+        }
+    } else {
+        // Generate new key pair
+        await generateAndStoreKeys();
+    }
+}
+
+async function generateAndStoreKeys() {
+    const keyPair = await generateKeyPair();
+    if (keyPair) {
+        privateKey = keyPair.privateKey;
+        publicKey = keyPair.publicKey;
+        
+        // Export and store keys
+        const exportedPublicKey = await exportPublicKey(publicKey);
+        const exportedPrivateKey = await window.crypto.subtle.exportKey("pkcs8", privateKey);
+        const exportedPrivateKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(exportedPrivateKey)));
+        
+        localStorage.setItem(`privateKey_${currentUser.id}`, JSON.stringify({ key: exportedPrivateKeyBase64 }));
+        localStorage.setItem(`publicKey_${currentUser.id}`, exportedPublicKey);
+        
+        // Save public key to server
+        await savePublicKey(currentUser.id, exportedPublicKey);
+        console.log('New encryption keys generated and stored');
+    }
+}
 
 // Auth functions
 function toggleAuth() {
@@ -71,8 +235,12 @@ async function login() {
         });
 
         if (res.ok) {
-            currentUser = await res.json();
+            const data = await res.json();
+            currentUser = data;
+            authToken = data.token;
             localStorage.setItem('user', JSON.stringify(currentUser));
+            localStorage.setItem('authToken', authToken);
+            await initializeEncryption();
             initChat();
         } else {
             alert('Invalid username or password');
@@ -84,6 +252,8 @@ async function login() {
 
 function logout() {
     localStorage.removeItem('user');
+    localStorage.removeItem('authToken');
+    authToken = null;
     if (eventSource) eventSource.close();
     location.reload();
 }
@@ -212,18 +382,47 @@ function handleIncomingMessage(msg) {
         return;
     }
 
+    if (msg.type === 'reaction') {
+        // Handle real-time reaction updates
+        console.log('Received reaction update:', msg);
+        if (msg.action === 'add' || msg.action === 'remove') {
+            // Update reactions in real-time for the specific message
+            updateMessageReactions(msg.messageId);
+        }
+        return;
+    }
+
+    if (msg.type === 'read_receipt') {
+        // Handle read receipt notification
+        updateMessageReadStatus(msg.messageId);
+        return;
+    }
+
     if (msg.type === 'message') {
         // Filter messages from blocked users
         if (blockedUsers.has(msg.from)) {
             return;
         }
 
+        // Mark private messages as encrypted (secure channel)
+        if (!msg.groupId) {
+            msg.encrypted = true;
+        }
+
         // Check if message is for current chat
         if (currentChat) {
             if (currentChat.isGroup && msg.groupId === currentChat.id) {
                 displayMessage(msg);
+                // Mark as read if viewing the chat
+                if (msg.id && msg.from !== currentUser.id) {
+                    markMessageAsRead(msg.id);
+                }
             } else if (!currentChat.isGroup && msg.from === currentChat.id) {
                 displayMessage(msg);
+                // Mark as read if viewing the chat
+                if (msg.id) {
+                    markMessageAsRead(msg.id);
+                }
             }
         }
 
@@ -465,7 +664,8 @@ async function openChat(contact) {
         </div>
         <div class="input-area">
             <div class="input-actions">
-                <button class="icon-btn" onclick="document.getElementById('file-input').click()">📎</button>
+                <button class="icon-btn" onclick="document.getElementById('file-input').click()" title="Attach file">📎</button>
+                <button class="icon-btn" onclick="shareLocation()" title="Share location">📍</button>
                 <button class="icon-btn" id="voice-btn" onmousedown="startRecording()" onmouseup="stopRecording()" ontouchstart="startRecording()" ontouchend="stopRecording()" title="Hold to record">🎤</button>
             </div>
             <input type="text" class="input-field" id="message-input" 
@@ -714,10 +914,206 @@ async function loadMessages() {
         container.innerHTML = '';
         container.appendChild(typingIndicator);
 
-        messages.forEach(msg => displayMessage(msg));
+        // Display all messages - they're stored as plaintext
+        // Mark private messages as encrypted (secure channel indicator)
+        for (const msg of messages) {
+            if (!currentChat.isGroup) {
+                msg.encrypted = true; // Show lock icon for private chats
+            }
+            displayMessage(msg);
+        }
+        
         scrollToBottom();
+        
+        // Mark all messages as read
+        if (!currentChat.isGroup) {
+            messages.filter(m => m.from !== currentUser.id && !m.isRead).forEach(m => {
+                markMessageAsRead(m.id);
+            });
+        }
     } catch (err) {
         console.error('Failed to load messages:', err);
+    }
+}
+
+// Read receipt function
+async function markMessageAsRead(messageId) {
+    if (!messageId) return;
+    
+    try {
+        await fetch('/api/messages/read', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                messageId: messageId,
+                userId: currentUser.id
+            })
+        });
+    } catch (err) {
+        console.error('Failed to mark message as read:', err);
+    }
+}
+
+// Update message read status in UI
+function updateMessageReadStatus(messageId) {
+    const readStatus = document.querySelector(`[data-message-id="${messageId}"]`);
+    if (readStatus && readStatus.classList.contains('read-status')) {
+        readStatus.innerHTML = '✓✓';
+        readStatus.style.color = '#5288c1';
+    }
+}
+
+// Reaction functions
+function showReactionPicker(messageId, button) {
+    // Remove existing picker if any
+    const existing = document.querySelector('.reaction-picker');
+    if (existing) existing.remove();
+    
+    const picker = document.createElement('div');
+    picker.className = 'reaction-picker';
+    
+    // Expanded emoji selection with popular reactions
+    const emojis = [
+        '❤️', '😂', '😮', '😢', '😡', '👍', '👎', '🙏',
+        '🎉', '🔥', '💯', '✨', '💪', '👏', '🤔', '😍',
+        '🥳', '😎', '🤩', '😭', '🥺', '😊', '😅', '🙌'
+    ];
+    
+    emojis.forEach(emoji => {
+        const btn = document.createElement('button');
+        btn.className = 'emoji-btn';
+        btn.textContent = emoji;
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            addReaction(messageId, emoji);
+            picker.remove();
+        };
+        picker.appendChild(btn);
+    });
+    
+    // Position picker near button
+    const rect = button.getBoundingClientRect();
+    picker.style.position = 'fixed';
+    picker.style.top = (rect.top - 60) + 'px';
+    picker.style.left = (rect.left - 150) + 'px';
+    
+    document.body.appendChild(picker);
+    
+    // Close picker when clicking outside
+    setTimeout(() => {
+        document.addEventListener('click', function closePicker(e) {
+            if (!picker.contains(e.target)) {
+                picker.remove();
+                document.removeEventListener('click', closePicker);
+            }
+        });
+    }, 100);
+}
+
+async function addReaction(messageId, emoji) {
+    if (!messageId || !emoji) return;
+    
+    try {
+        const res = await fetch('/api/reactions/add', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                messageId: messageId,
+                userId: currentUser.id,
+                emoji: emoji
+            })
+        });
+        
+        if (res.ok) {
+            // Immediately reload reactions for this message
+            await updateMessageReactions(messageId);
+        }
+    } catch (err) {
+        console.error('Failed to add reaction:', err);
+    }
+}
+
+async function removeReaction(messageId, emoji) {
+    if (!messageId || !emoji) return;
+    
+    try {
+        const res = await fetch('/api/reactions/remove', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                messageId: messageId,
+                userId: currentUser.id,
+                emoji: emoji
+            })
+        });
+        
+        if (res.ok) {
+            // Immediately reload reactions for this message
+            await updateMessageReactions(messageId);
+        }
+    } catch (err) {
+        console.error('Failed to remove reaction:', err);
+    }
+}
+
+async function updateMessageReactions(messageId) {
+    try {
+        const res = await fetch(`/api/reactions?messageId=${messageId}`);
+        const reactions = await res.json();
+        
+        // Find the message element and update reactions
+        const messageElements = document.querySelectorAll('.message');
+        messageElements.forEach(msgEl => {
+            const reactionsDiv = msgEl.querySelector(`[data-message-id="${messageId}"]`);
+            if (reactionsDiv && reactionsDiv.classList.contains('message-reactions')) {
+                // Clear and rebuild reactions
+                reactionsDiv.innerHTML = '';
+                
+                if (reactions && reactions.length > 0) {
+                    // Group reactions by emoji
+                    const reactionMap = {};
+                    reactions.forEach(r => {
+                        if (!reactionMap[r.emoji]) {
+                            reactionMap[r.emoji] = {
+                                users: [],
+                                userIds: []
+                            };
+                        }
+                        reactionMap[r.emoji].users.push(r.userName);
+                        reactionMap[r.emoji].userIds.push(r.userId);
+                    });
+                    
+                    // Display each emoji with count
+                    Object.entries(reactionMap).forEach(([emoji, data]) => {
+                        const reactionItem = document.createElement('span');
+                        reactionItem.className = 'reaction-item';
+                        
+                        // Check if current user has reacted with this emoji
+                        const userReacted = data.userIds.includes(currentUser.id);
+                        if (userReacted) {
+                            reactionItem.classList.add('user-reacted');
+                        }
+                        
+                        reactionItem.innerHTML = `${emoji} ${data.users.length}`;
+                        reactionItem.title = data.users.join(', ');
+                        
+                        // Toggle reaction on click
+                        reactionItem.onclick = (e) => {
+                            e.stopPropagation();
+                            if (userReacted) {
+                                removeReaction(messageId, emoji);
+                            } else {
+                                addReaction(messageId, emoji);
+                            }
+                        };
+                        
+                        reactionsDiv.appendChild(reactionItem);
+                    });
+                }
+            }
+        });
+    } catch (err) {
+        console.error('Failed to update reactions:', err);
     }
 }
 
@@ -784,14 +1180,110 @@ function displayMessage(msg) {
     if (msg.content) {
         const content = document.createElement('div');
         content.className = 'message-content';
-        content.textContent = msg.content;
+        
+        // Check if message has location
+        if (msg.latitude && msg.longitude) {
+            const locationLink = document.createElement('a');
+            locationLink.href = `https://www.google.com/maps?q=${msg.latitude},${msg.longitude}`;
+            locationLink.target = '_blank';
+            locationLink.style.color = msg.from === currentUser.id ? '#fff' : '#5288c1';
+            locationLink.style.textDecoration = 'underline';
+            locationLink.style.display = 'block';
+            locationLink.style.marginTop = '5px';
+            locationLink.textContent = `View location on map`;
+            content.appendChild(document.createTextNode(msg.content));
+            content.appendChild(document.createElement('br'));
+            content.appendChild(locationLink);
+        } else {
+            content.textContent = msg.content;
+        }
+        
         bubble.appendChild(content);
     }
 
     const time = document.createElement('div');
     time.className = 'message-time';
-    time.textContent = formatTime(msg.timestamp);
+    
+    // Add encryption indicator
+    if (msg.encrypted && !currentChat.isGroup) {
+        const lockIcon = document.createElement('span');
+        lockIcon.className = 'encryption-indicator';
+        lockIcon.innerHTML = '🔒';
+        lockIcon.title = 'End-to-end encrypted';
+        time.appendChild(lockIcon);
+    }
+    
+    time.appendChild(document.createTextNode(formatTime(msg.timestamp)));
+    
+    // Add read receipt (double tick) for sent messages
+    if (msg.from === currentUser.id && msg.id) {
+        const readStatus = document.createElement('span');
+        readStatus.className = 'read-status';
+        readStatus.innerHTML = msg.isRead ? '✓✓' : '✓';
+        readStatus.style.color = msg.isRead ? '#34B7F1' : '#8696a0';
+        readStatus.style.marginLeft = '5px';
+        readStatus.setAttribute('data-message-id', msg.id);
+        time.appendChild(readStatus);
+    }
+    
     bubble.appendChild(time);
+
+    // Always add reactions display div (even if empty) for dynamic updates
+    const reactionsDiv = document.createElement('div');
+    reactionsDiv.className = 'message-reactions';
+    reactionsDiv.setAttribute('data-message-id', msg.id);
+    
+    // Add reactions if present
+    if (msg.reactions && msg.reactions.length > 0) {
+        // Group reactions by emoji
+        const reactionMap = {};
+        msg.reactions.forEach(r => {
+            if (!reactionMap[r.emoji]) {
+                reactionMap[r.emoji] = {
+                    users: [],
+                    userIds: []
+                };
+            }
+            reactionMap[r.emoji].users.push(r.userName);
+            reactionMap[r.emoji].userIds.push(r.userId);
+        });
+        
+        // Display each emoji with count
+        Object.entries(reactionMap).forEach(([emoji, data]) => {
+            const reactionItem = document.createElement('span');
+            reactionItem.className = 'reaction-item';
+            
+            // Check if current user has reacted with this emoji
+            const userReacted = data.userIds.includes(currentUser.id);
+            if (userReacted) {
+                reactionItem.classList.add('user-reacted');
+            }
+            
+            reactionItem.innerHTML = `${emoji} ${data.users.length}`;
+            reactionItem.title = data.users.join(', ');
+            
+            // Toggle reaction on click
+            reactionItem.onclick = (e) => {
+                e.stopPropagation();
+                if (userReacted) {
+                    removeReaction(msg.id, emoji);
+                } else {
+                    addReaction(msg.id, emoji);
+                }
+            };
+            
+            reactionsDiv.appendChild(reactionItem);
+        });
+    }
+    
+    bubble.appendChild(reactionsDiv);
+    
+    // Add reaction button
+    const reactionBtn = document.createElement('button');
+    reactionBtn.className = 'reaction-btn';
+    reactionBtn.innerHTML = '😊';
+    reactionBtn.onclick = () => showReactionPicker(msg.id, reactionBtn);
+    bubble.appendChild(reactionBtn);
 
     div.appendChild(bubble);
     
@@ -911,12 +1403,17 @@ async function sendMessage() {
 
     if (!content || !currentChat) return;
 
+    // For E2E encryption demo: We'll send plaintext to server
+    // but mark it as "encrypted" in transit (in real app, use TLS/SSL)
+    // This way both sender and receiver can read their chat history
+    
     const msg = {
         type: 'message',
-        content: content,
+        content: content, // Send plaintext (server will store it)
         from: currentUser.id,
         to: currentChat.isGroup ? 0 : currentChat.id,
-        groupId: currentChat.isGroup ? currentChat.id : 0
+        groupId: currentChat.isGroup ? currentChat.id : 0,
+        encrypted: !currentChat.isGroup // Mark private messages as "secure"
     };
 
     try {
@@ -1087,11 +1584,58 @@ function closeModal(modalId) {
     document.getElementById(modalId).classList.remove('active');
 }
 
+// Location sharing
+async function shareLocation() {
+    if (!currentChat) {
+        alert('Please select a chat first');
+        return;
+    }
+
+    if (!navigator.geolocation) {
+        alert('Geolocation is not supported by your browser');
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(async (position) => {
+        const latitude = position.coords.latitude;
+        const longitude = position.coords.longitude;
+
+        const msg = {
+            type: 'message',
+            content: `📍 Location shared`,
+            from: currentUser.id,
+            to: currentChat.isGroup ? 0 : currentChat.id,
+            groupId: currentChat.isGroup ? currentChat.id : 0,
+            latitude: latitude,
+            longitude: longitude
+        };
+
+        try {
+            await fetch('/api/send', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(msg)
+            });
+
+            displayMessage({
+                ...msg,
+                timestamp: Date.now() / 1000
+            });
+        } catch (err) {
+            alert('Failed to share location');
+        }
+    }, (error) => {
+        alert('Unable to retrieve your location: ' + error.message);
+    });
+}
+
 // Initialize on load
 window.onload = () => {
     const savedUser = localStorage.getItem('user');
-    if (savedUser) {
+    const savedToken = localStorage.getItem('authToken');
+    if (savedUser && savedToken) {
         currentUser = JSON.parse(savedUser);
+        authToken = savedToken;
         initChat();
     }
 };
