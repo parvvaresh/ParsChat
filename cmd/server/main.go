@@ -103,6 +103,14 @@ func initDB() {
 		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
 
+	// Create blocked users table
+	db.Exec(`CREATE TABLE IF NOT EXISTS blocked_users (
+		blocker_id INTEGER NOT NULL,
+		blocked_id INTEGER NOT NULL,
+		blocked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY(blocker_id, blocked_id)
+	)`)
+
 	log.Println("[OK] Database initialized")
 }
 
@@ -556,6 +564,204 @@ func typingHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// onlineUsersHandler returns list of online user IDs
+func onlineUsersHandler(w http.ResponseWriter, r *http.Request) {
+	enableCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	mu.RLock()
+	onlineIDs := make([]int, 0, len(clients))
+	for userID := range clients {
+		onlineIDs = append(onlineIDs, userID)
+	}
+	mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(onlineIDs)
+}
+
+// blockUserHandler handles blocking a user
+func blockUserHandler(w http.ResponseWriter, r *http.Request) {
+	enableCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	var req struct {
+		BlockerID int `json:"blockerId"`
+		BlockedID int `json:"blockedId"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	_, err := db.Exec("INSERT OR IGNORE INTO blocked_users (blocker_id, blocked_id) VALUES (?, ?)",
+		req.BlockerID, req.BlockedID)
+	if err != nil {
+		http.Error(w, "Failed to block user", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "blocked"})
+}
+
+// unblockUserHandler handles unblocking a user
+func unblockUserHandler(w http.ResponseWriter, r *http.Request) {
+	enableCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	var req struct {
+		BlockerID int `json:"blockerId"`
+		BlockedID int `json:"blockedId"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	_, err := db.Exec("DELETE FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?",
+		req.BlockerID, req.BlockedID)
+	if err != nil {
+		http.Error(w, "Failed to unblock user", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "unblocked"})
+}
+
+// getBlockedUsersHandler returns list of blocked users for a user
+func getBlockedUsersHandler(w http.ResponseWriter, r *http.Request) {
+	enableCORS(w)
+	userID := r.URL.Query().Get("userId")
+
+	rows, err := db.Query("SELECT blocked_id FROM blocked_users WHERE blocker_id = ?", userID)
+	if err != nil {
+		http.Error(w, "Server error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var blockedIDs []int
+	for rows.Next() {
+		var id int
+		rows.Scan(&id)
+		blockedIDs = append(blockedIDs, id)
+	}
+
+	if blockedIDs == nil {
+		blockedIDs = []int{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(blockedIDs)
+}
+
+// leaveGroupHandler handles user leaving a group
+func leaveGroupHandler(w http.ResponseWriter, r *http.Request) {
+	enableCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	var req struct {
+		GroupID int `json:"groupId"`
+		UserID  int `json:"userId"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	_, err := db.Exec("DELETE FROM group_members WHERE group_id = ? AND user_id = ?",
+		req.GroupID, req.UserID)
+	if err != nil {
+		http.Error(w, "Failed to leave group", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "left"})
+}
+
+// removeGroupMemberHandler handles removing a member from group
+func removeGroupMemberHandler(w http.ResponseWriter, r *http.Request) {
+	enableCORS(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	var req struct {
+		GroupID   int `json:"groupId"`
+		UserID    int `json:"userId"`
+		RemoverID int `json:"removerId"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Check if remover is the group creator
+	var creatorID int
+	err := db.QueryRow("SELECT creator_id FROM groups WHERE id = ?", req.GroupID).Scan(&creatorID)
+	if err != nil || creatorID != req.RemoverID {
+		http.Error(w, "Only group creator can remove members", http.StatusForbidden)
+		return
+	}
+
+	_, err = db.Exec("DELETE FROM group_members WHERE group_id = ? AND user_id = ?",
+		req.GroupID, req.UserID)
+	if err != nil {
+		http.Error(w, "Failed to remove member", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "removed"})
+}
+
+// getGroupMembersHandler returns members of a group
+func getGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
+	enableCORS(w)
+	groupID := r.URL.Query().Get("groupId")
+
+	rows, err := db.Query(`
+		SELECT u.id, u.username, u.full_name 
+		FROM users u 
+		JOIN group_members gm ON u.id = gm.user_id 
+		WHERE gm.group_id = ?
+		ORDER BY u.full_name`, groupID)
+	if err != nil {
+		http.Error(w, "Server error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var members []User
+	for rows.Next() {
+		var u User
+		rows.Scan(&u.ID, &u.Username, &u.FullName)
+		members = append(members, u)
+	}
+
+	if members == nil {
+		members = []User{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(members)
+}
+
 func main() {
 	initDB()
 
@@ -574,6 +780,13 @@ func main() {
 	http.HandleFunc("/api/send", sendMessageHandler)
 	http.HandleFunc("/api/typing", typingHandler)
 	http.HandleFunc("/api/upload", uploadHandler)
+	http.HandleFunc("/api/online", onlineUsersHandler)
+	http.HandleFunc("/api/block", blockUserHandler)
+	http.HandleFunc("/api/unblock", unblockUserHandler)
+	http.HandleFunc("/api/blocked", getBlockedUsersHandler)
+	http.HandleFunc("/api/group/leave", leaveGroupHandler)
+	http.HandleFunc("/api/group/remove", removeGroupMemberHandler)
+	http.HandleFunc("/api/group/members", getGroupMembersHandler)
 	http.HandleFunc("/events", sseHandler)
 
 	// Serve uploaded files
