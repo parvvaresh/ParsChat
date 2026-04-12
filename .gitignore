@@ -1,11 +1,18 @@
 # Binary
 chat-server
+backend/chat-server
 
 # Database
 chat.db
+backend/chat.db
 
 # Uploads
 uploads/
+backend/uploads/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
 
 # IDE
 .vscode/
