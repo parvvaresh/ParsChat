@@ -1,5 +1,0 @@
-[33mc135972[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m Merge pull request #2 from parvvaresh/feature/chat-app
-[33m6839208[m[33m ([m[1;31morigin/feature/chat-app[m[33m, [m[1;32mfeature/chat-app[m[33m)[m feat: Add user blocking, group management, message filters, and voice messaging
-[33maba2dee[m Merge pull request #1 from parvvaresh/feature/chat-app
-[33mfb1e851[m feat: WhatsApp-like chat app with SSE, auth, groups, media upload
-[33mf615db3[m update readme

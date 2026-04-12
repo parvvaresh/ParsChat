@@ -1,393 +1,284 @@
-# TCP Chat Application
+# ParsChat
 
-> **WARNING - CRITICAL INFRASTRUCTURE**  
-> This repository is designed to facilitate communication for Iranian citizens during protests and internet shutdowns. It operates on domestic servers to maintain connectivity when external internet access is restricted or censored. Use responsibly and ensure secure deployment in sensitive environments.
+ParsChat is a full-stack real-time chat application with a Go backend and a React frontend.
 
-A feature-rich chat application with a WhatsApp-like UI, built with Go and Server-Sent Events for real-time communication.
+## Overview
 
-## Screenshots
+- Backend: Go (`net/http`) + SQLite + JWT auth + SSE realtime stream
+- Frontend: React + TypeScript + Zustand + Axios + Vite
+- Realtime: Server-Sent Events for incoming messages, typing signals, and online/offline updates
+- Storage: SQLite database (`chat.db`) and local upload storage (`uploads/`)
 
-![Chat Application](assets/chat.png)
-![Chat Application](assets/all.png)
+## Key Features
 
-*Modern WhatsApp-like interface with real-time messaging, groups, and media sharing*
-
----
-
-## Features
-
-### Authentication and Security
-* **User Registration and Login** - Complete authentication system
-* **Password Hashing** - Using SHA256
-* **Secure Sessions** - User management with SSE
-* **User Blocking** - Block/unblock unwanted users
-* **Mutual Contact System** - Two-way contact addition
-
-### Messaging
-* **Private Chat** - One-on-one messaging with privacy controls
-* **Group Chats** - Create and manage groups with members
-* **Leave Group** - Exit from groups you no longer want to be in
-* **File Sharing** - Send images, videos, and files
-* **Voice Messages** - Record and send voice messages
-* **Media Filtering** - Filter messages by type (images/files/audio)
-* **Typing Indicator** - Shows when user is typing
-* **Real-time Messaging** - Using Server-Sent Events
-* **Message Blocking** - Blocked users cannot send you messages
-
-### User Management
-* **Username Search** - Find and add users by username
-* **Contact Management** - Add/remove contacts easily
-* **Block List** - View and manage blocked users
-* **Group Member Management** - Add members from your contacts
-
-### User Interface
-* **WhatsApp-like Design** - Modern and familiar UI
-* **Dark Mode** - Eye-comfortable dark theme
-* **Responsive** - Works on desktop and mobile
-* **Media Preview** - Display images and videos in chat
-* **Audio Player** - Built-in player for voice messages
-* **Media Filter Tabs** - Quick access to specific media types
-* **Smooth Animations** - Professional user experience
-* **Loading States** - Clear feedback during operations
-
-### Technical
-* **SQLite Database** - Data storage
-* **Server-Sent Events** - Real-time communications
-* **RESTful API** - Modern architecture
-* **Docker** - Ready for deployment
-* **Offline Capability** - Works on local networks without internet
-
----
+- User authentication (register/login with JWT)
+- One-to-one chat
+- Group chat (create group, add/remove members, leave group)
+- Typing indicators
+- Online/offline presence
+- Block / unblock users
+- Media and file sharing (image, video, audio, generic files)
+- Voice message recording from browser microphone
+- Location sharing (latitude/longitude with map link)
+- Emoji picker in composer
+- Profile modal (view/edit username, full name, bio, avatar)
+- Message reactions API support
 
 ## Project Structure
 
+```text
+ParsChat/
+├── backend/
+│   ├── cmd/server/main.go
+│   ├── internal/
+│   │   ├── config/
+│   │   ├── controllers/
+│   │   ├── middleware/
+│   │   ├── models/
+│   │   ├── routes/
+│   │   ├── server/
+│   │   ├── services/
+│   │   └── utils/
+│   ├── public/
+│   ├── uploads/
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   └── go.mod
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   ├── features/
+│   │   ├── hooks/
+│   │   ├── lib/
+│   │   ├── services/
+│   │   └── types.ts
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   ├── package.json
+│   └── vite.config.ts
+├── API_AUDIT.md
+├── LOCATION_SHARING.md
+└── docker-compose.yml
 ```
-chatApp/
-├── cmd/
-│   └── server/
-│       └── main.go        # Main server with SSE and API
-├── public/
-│   ├── index.html         # Web UI
-│   └── app.js             # Frontend logic
-├── uploads/               # Uploaded files
-├── chat.db                # SQLite database
-├── Dockerfile             # Docker image
-├── docker-compose.yml     # Service configuration
-├── go.mod                 # Go dependencies
-└── README.md              # This file
-```
 
----
+## Tech Stack
 
-## Quick Start
+### Backend
+- Go 1.21
+- SQLite (`github.com/mattn/go-sqlite3`)
+- JWT (`github.com/golang-jwt/jwt/v5`)
+- SSE over HTTP (`/events`)
 
-### Prerequisites
+### Frontend
+- React 18
+- TypeScript
+- Zustand (state management)
+- Axios (HTTP client)
+- Vite (dev server and bundler)
 
-* Go 1.21 or later
-* Docker and Docker Compose (optional)
-* Modern web browser
+## Requirements
 
----
+- Go 1.21+
+- Node.js 20+
+- npm 9+
+- Docker + Docker Compose (optional)
 
-## Running Locally
+## Environment Variables
 
-### 1. Install Dependencies
+Backend reads these variables:
+
+- `PORT` (default: `8080`)
+- `DB_PATH` (default: `./chat.db`)
+- `JWT_SECRET` (default is development-only fallback)
+
+Frontend (Vite) can use:
+
+- `VITE_PROXY_TARGET` (default: `http://localhost:8080`)
+
+## Run Locally (Recommended for Development)
+
+### 1) Start backend
 
 ```bash
-go mod download
+cd backend
+go mod tidy
+go run ./cmd/server
 ```
 
-### 2. Run Server
+Backend URL: `http://localhost:8080`
+
+### 2) Start frontend
+
+Open a second terminal:
 
 ```bash
-go run cmd/server/main.go
+cd frontend
+npm install
+npm run dev
 ```
 
-Server runs on `http://localhost:8080`
+Frontend URL: `http://localhost:5173`
 
-### 3. Open in Browser
+Vite proxies `/api`, `/events`, and `/uploads` to the backend.
 
-Go to `http://localhost:8080` and:
-1. Register or login
-2. Search for other users
-3. Start chatting!
+## Build Frontend for Backend Static Serving
 
----
-
-## Running with Docker
-
-### Build and Run
+If you build the frontend, backend can serve `frontend/dist` automatically.
 
 ```bash
-docker-compose up --build
+cd frontend
+npm install
+npm run build
 ```
 
-### Access the Application
-
-Go to `http://localhost:8080`
-
-### Stop Services
+Then run backend as usual:
 
 ```bash
-docker-compose down
+cd backend
+go run ./cmd/server
 ```
 
----
+## Docker
 
-## Usage Guide
+### Run full stack from root
 
-### Registration and Login
+```bash
+docker compose up --build
+```
 
-1. Open the login page
-2. Click "Register"
-3. Enter username, full name, and password
-4. After registration, login
+Services:
 
-### Starting a Private Chat
+- Backend: `http://localhost:8080`
+- Frontend: `http://localhost:5173`
 
-1. Click the chat button `[C]` (New Chat)
-2. **Option A - Search by Username:**
-   - Type a username in the search box
-   - Click "Search"
-   - Click "Add Contact" if found
-3. **Option B - Select from List:**
-   - Browse all users below
-   - Click "Add" to add as contact
-   - Click on contact to start chatting
+### Run only backend
 
-### Blocking/Unblocking Users
+```bash
+cd backend
+docker compose up --build
+```
 
-1. Open a private chat
-2. Click the block button `[X]` in chat header
-3. To unblock, click the `[✓]` button
+### Run only frontend
 
-### Filtering Messages by Media Type
+```bash
+cd frontend
+docker compose up --build
+```
 
-In private chats:
-1. Use the filter tabs: **All | Images | Files | Audio**
-2. View only specific types of shared media
+### Stop containers
 
-### Sending Voice Messages
+From whichever directory you started compose:
 
-1. Press and hold the microphone button `[🎤]`
-2. Record your voice message
-3. Release to send automatically
+```bash
+docker compose down
+```
 
-### Creating a Group
+## API Summary
 
-1. Click the group button `[G]` (New Group)
-2. Enter group name
-3. Select members from **your contacts**
-4. Click "Create Group"
+### Auth
+- `POST /api/register`
+- `POST /api/login`
 
-### Leaving a Group
+### Users and Profile
+- `GET /api/users`
+- `GET /api/profile?userId=...`
+- `POST /api/profile`
 
-1. Open a group chat
-2. Click the `[Leave]` button in chat header
-3. Confirm to leave the group
+### Messaging and Realtime
+- `GET /api/messages`
+- `POST /api/send`
+- `POST /api/typing`
+- `GET /events`
 
-### Sending Media
-
-1. Click the attachment button in the input area
-2. Select an image or video
-3. File is automatically uploaded and sent
-
-### Additional Features
-
-* **Search**: Use the search box to find contacts
-* **Typing**: When you type, the other party sees it
-* **Online Status**: See online status indicator
-
----
-
-## API Endpoints
-
-### Authentication
-
-* `POST /api/register` - Register new user
-* `POST /api/login` - User login
-
-### Users and Contacts
-
-* `GET /api/users` - Get user list
-* `GET /api/contacts?userId={id}` - Get user's contacts
-* `POST /api/contacts` - Add contact (mutual)
-* `DELETE /api/contacts` - Remove contact
+### Uploads and Presence
+- `POST /api/upload`
+- `GET /api/online`
 
 ### Blocking
-
-* `POST /api/block` - Block a user
-* `POST /api/unblock` - Unblock a user
-* `GET /api/blocked?userId={id}` - Get blocked users list
-* `GET /api/isblocked?blockerId={id}&blockedId={id}` - Check if blocked
+- `POST /api/block`
+- `POST /api/unblock`
+- `GET /api/blocked`
 
 ### Groups
+- `GET /api/groups`
+- `POST /api/groups`
+- `POST /api/group/add`
+- `POST /api/group/remove`
+- `POST /api/group/leave`
+- `GET /api/group/members`
 
-* `GET /api/groups?userId={id}` - Get user's groups
-* `POST /api/groups` - Create new group
-* `POST /api/groups/leave` - Leave a group
+### Reads and Reactions
+- `POST /api/messages/read`
+- `POST /api/reactions/add`
+- `POST /api/reactions/remove`
+- `GET /api/reactions`
 
-### Messages
+### Key Exchange
+- `POST /api/keys/save`
+- `GET /api/keys/get`
 
-* `GET /api/messages?userId={id}&contactId={id}` - Get private messages
-* `GET /api/messages?userId={id}&contactId={id}&mediaFilter={type}` - Get filtered messages
-* `GET /api/messages?userId={id}&groupId={id}` - Get group messages
-* `POST /api/send` - Send message
-* `POST /api/typing` - Send typing indicator
-* `GET /events?userId={id}` - SSE connection
+For detailed request/response shapes, check `API_AUDIT.md`.
 
-### Media
+## Database Notes
 
-* `POST /api/upload` - Upload file (images/videos/audio/voice)
-* `GET /uploads/{filename}` - Get uploaded file
+Database schema is initialized automatically on startup.
 
----
+Current tables include:
 
-## Database Schema
+- `users`
+- `groups`
+- `group_members`
+- `messages`
+- `message_reads`
+- `message_reactions`
+- `blocked_users`
+- `user_keys`
 
-### users table
-```sql
-- id (INTEGER PRIMARY KEY)
-- username (TEXT UNIQUE)
-- full_name (TEXT)
-- password (TEXT - SHA256 hash)
-- created_at (DATETIME)
-```
+The service also performs lightweight migration attempts for profile fields (`bio`, `avatar_url`) on startup.
 
-### contacts table
-```sql
-- user_id (INTEGER)
-- contact_id (INTEGER)
-- added_at (DATETIME)
-- PRIMARY KEY(user_id, contact_id)
-```
+## Troubleshooting
 
-### blocked_users table
-```sql
-- blocker_id (INTEGER)
-- blocked_id (INTEGER)
-- blocked_at (DATETIME)
-- PRIMARY KEY(blocker_id, blocked_id)
-```
+### `vite: not found`
 
-### groups table
-```sql
-- id (INTEGER PRIMARY KEY)
-- name (TEXT)
-- creator_id (INTEGER)
-- created_at (DATETIME)
-```
-
-### group_members table
-```sql
-- group_id (INTEGER)
-- user_id (INTEGER)
-- joined_at (DATETIME)
-```
-
-### messages table
-```sql
-- id (INTEGER PRIMARY KEY)
-- from_user (INTEGER)
-- to_user (INTEGER, nullable)
-- group_id (INTEGER, nullable)
-- content (TEXT, nullable)
-- media_url (TEXT, nullable)
-- media_type (TEXT, nullable - image/video/file/audio/voice)
-- timestamp (DATETIME)
-```
-
----
-
-## Production Deployment
-
-### Environment Variables
+Install frontend dependencies first:
 
 ```bash
-PORT=8080              # Server port
+cd frontend
+npm install
+npm run dev
 ```
 
-### Security Notes
+### `Cannot find module 'zustand'` or other frontend package errors
 
-1. Use HTTPS in production
-2. Enforce strong passwords
-3. Implement rate limiting
-4. Regular database backups
-5. Input validation and sanitization
+```bash
+cd frontend
+rm -rf node_modules package-lock.json
+npm install
+npm run dev
+```
 
----
+### Port already in use
 
-## Development
-x] ~~Voice messages~~ ✅ Completed
-- [x] ~~User blocking~~ ✅ Completed
-- [x] ~~Username search~~ ✅ Completed
-- [x] ~~Media filtering~~ ✅ Completed
-- [x] ~~Leave group~~ ✅ Completed
-- [ ] JWT authentication
-- [ ] End-to-end encryption
-- [ ] Voice/video calls
-- [ ] Push notifications
-- [ ] Emoji reactions
-- [ ] Location sharing
-- [ ] Message read receipt
+- Change backend `PORT`
+- Or stop the process currently using `8080` / `5173`
 
-### Dependencies
+### Uploads not accessible
 
-* `github.com/mattn/go-sqlite3` - SQLite driver
+- Ensure backend is running
+- Ensure `uploads/` exists and is writable
+- Access files via `/uploads/<filename>`
 
----
+## Security Notes
 
-## TODO / Future Improvements
+- Default `JWT_SECRET` fallback is for development only.
+- Set a strong `JWT_SECRET` in production.
+- Consider running behind HTTPS and adding stricter auth checks for profile update ownership.
 
-- [ ] JWT authentication
-- [ ] End-to-end encryption
-- [ ] Voice/video calls
-- [ ] Push notifications
-- [ ] Emoji reactions
-- [ ] Location sharing
-- [ ] Voice messages
-- [ ] Custom themes
-- [ ] Mobile app (React Native)
+## Related Docs
 
----
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
-
----
+- `API_AUDIT.md`: API contracts and endpoint details
+- `LOCATION_SHARING.md`: location-sharing behavior
 
 ## License
 
-This project is released under the MIT License.
-
----
-
-## Ethical Use
-
-This tool is designed to help free communication during critical times. Please:
-
-* Use responsibly and legally
-* Respect user privacy
-* Avoid misuse
-* Be aware of security requirements
-
----
-
-## Support
-
-For issues, questions, or feature requests:
-* Create an Issue on GitHub
-* Join discussions
-
----
-
-**Built for free communication**
-
-
+No license file is currently included in this repository.

@@ -1,15 +1,29 @@
-version: "3.9"
-
 services:
-  chat-server:
-    build: .
-    container_name: chat-server
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: parschat-backend
     ports:
       - "8080:8080"
-    volumes:
-      - ./uploads:/app/uploads
-      - ./chat.db:/app/chat.db
-    restart: unless-stopped
     environment:
       - PORT=8080
-    command: ./chat-server
+      - DB_PATH=/app/chat.db
+      - JWT_SECRET=change-this-in-production
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./backend/chat.db:/app/chat.db
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: parschat-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_PROXY_TARGET=http://backend:8080
+    depends_on:
+      - backend
+    restart: unless-stopped
